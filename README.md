@@ -6,7 +6,7 @@ This project is a 2D N-body gravity simulator written in Python using Pygame. It
 
 The core feature is the implementation of the **Barnes-Hut algorithm**, an approximation method that scales to thousands of bodies. This allows the simulation to run in **O(n log n)** time, a massive improvement over the **O(n²)** time required by the (also included) direct-sum method.
 
-### 🔭 How It Works
+### How It Works
 
 * **Quadtree:** The 2D space is recursively partitioned into a  Quadtree.
 * **Barnes-Hut:** For any given body, the gravitational force from distant groups of bodies is approximated as a single force from their combined center of mass. This avoids thousands of individual calculations.
@@ -15,7 +15,7 @@ The core feature is the implementation of the **Barnes-Hut algorithm**, an appro
 
 ---
 
-## ✨ Features
+##  Features
 
 * **Efficient Simulation:** Choose between the fast **O(n log n) Barnes-Hut** algorithm or the precise **O(n²) Direct-Sum** method.
 * **Interactive Camera:** Smoothly **pan** (left-click + drag) and **zoom** (mouse wheel) to explore the universe.
@@ -27,8 +27,6 @@ The core feature is the implementation of the **Barnes-Hut algorithm**, an appro
     * Live UI overlay shows FPS, body count, simulation time, and current mode.
 
 ---
-
-## 🚀 Getting Started
 
 ### Prerequisites
 
@@ -60,7 +58,7 @@ You must have Python 3 and `pip` installed.
 
 ---
 
-## 🎮 Controls
+##  Controls
 
 | Key / Action | Description |
 | :--- | :--- |
@@ -71,6 +69,3 @@ You must have Python 3 and `pip` installed.
 | `T` | Toggle the Quad**t**ree visualization |
 | `Q` | Quit the simulation |
 
----
-
-## 📁 Project Structure
