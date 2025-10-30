@@ -33,7 +33,7 @@ class Simulation:
         self.trail_surface = pygame.Surface((width, height), pygame.SRCALPHA)
         self.selected_body = None
         self.use_barnes_hut = False
-        self.theta = 0.5
+        self.theta = 2
         self.show_quadtree = False
         self.quadtree = None
         self._setup_initial_conditions()
@@ -45,7 +45,7 @@ class Simulation:
         self.selected_body = None
         self.total_time = 0.0
 
-    def _generate_galaxy(self, num_bodies=500):
+    def _generate_galaxy(self, num_bodies=2000):
         self._setup_initial_conditions()
         sun = self.bodies[0]
         for _ in range(num_bodies):
