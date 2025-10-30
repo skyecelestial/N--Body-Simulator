@@ -2,19 +2,18 @@ import numpy as np
 
 class Quadtree:
     """
-    This represents node in quadtree each represeting rectangular area
+    Represents node in quadtree
     """
     def __init__(self, x, y, width, height):
         self.bounds = (x, y, width, height)
         self.body = None 
         self.children = [None, None, None, None] 
         
-        
         self.total_mass = 0
         self.center_of_mass = np.array([0.0, 0.0])
         
     def _get_quadrant(self, body):
-        """Determines which quadrant a body belongs to."""
+        """Decides which quadrant body belongs to"""
         x, y, width, height = self.bounds
         mid_x = x + width / 2
         mid_y = y + height / 2
@@ -54,16 +53,13 @@ class Quadtree:
         if self.body is not None:
             self._subdivide()
             
-            
             old_body = self.body
             quadrant_idx_old = self._get_quadrant(old_body)
             self.children[quadrant_idx_old].insert(old_body)
-            self.body = None # No longer a leaf node
-            
+            self.body = None 
             
             quadrant_idx_new = self._get_quadrant(body)
             self.children[quadrant_idx_new].insert(body)
-            
             
             self.total_mass = old_body.mass
             self.center_of_mass = old_body.position.copy()
