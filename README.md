@@ -17,7 +17,6 @@ The core feature is the implementation of the **Barnes-Hut algorithm**, an appro
 
 ##  Features
 
-* **Efficient Simulation:** Choose between the fast **O(n log n) Barnes-Hut** algorithm or the precise **O(n²) Direct-Sum** method.
 * **Interactive Camera:** Smoothly **pan** (left-click + drag) and **zoom** (mouse wheel) to explore the universe.
 * **Physics Engine:**
     * Stable Velocity Verlet integration.
@@ -58,14 +57,5 @@ You must have Python 3 and `pip` installed.
 
 ---
 
-##  Controls
 
-| Key / Action | Description |
-| :--- | :--- |
-| `Left-Click + Drag` | Pan the camera |
-| `Mouse Wheel` | Zoom in and out |
-| `P` | Pause or unpause the simulation |
-| `B` | Toggle between **B**arnes-Hut and Direct-Sum mode |
-| `T` | Toggle the Quad**t**ree visualization |
-| `Q` | Quit the simulation |
 
