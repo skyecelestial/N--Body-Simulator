@@ -1,383 +1,279 @@
-
 import pygame
 import numpy as np
 import random
 import os
 import shutil
-import sys
 from bodies import Body
 from quadtree import Quadtree
-from itertools import combinations 
 
-# --- CONSTANTS ---
-
-# PYGAME
-WIDTH, HEIGHT = 1600, 900
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-RED = (255, 100, 100)
-GREEN = (100, 255, 100)
-
-# PHYSICS
-G = 6.67430e-11
-AU = 1.496e11  # Astronomical Unit (meters)
-SOLAR_MASS = 1.989e30
-TIMESTEP = 3600 * 24  # 1 day in seconds
-BARNES_HUT_THETA = 0.5 # Accuracy of Barnes-Hut. 0 = direct, > 1 = less accurate
-
+AU = 1.496e11
+G = 39.478
+TIMESTEP_BASE = 1 / 365.25
 
 class Simulation:
-    """
-    Main class to run the N-body simulation, handle rendering, and user input.
-    """
-
-    def __init__(self):
-        """Initializes the simulation, Pygame, and sets up the bodies."""
-        pygame.init()
-        pygame.display.set_caption("N-Body Galaxy Simulator")
-
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    def __init__(self, width=800, height=800):
+        self.width, self.height = width, height
+        self.screen = pygame.display.set_mode((width, height))
+        pygame.display.set_caption("N-Body Simulator")
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("Arial", 16)
-        
-        self.running = True
-        self.paused = False
-        self.total_time = 0
-        self.selected_body = None
-        self.use_barnes_hut = True
-        self.show_quadtree = False
-        
-        # Camera
-        self.SCALE = 250 / AU  # Initial scale: 250 pixels per AU
-        self.offset = np.array([WIDTH / 2.0, HEIGHT / 2.0])
-        
         self.bodies = []
+        self.SCALE = 150
+        self.OFFSET = np.array([width / 2, height / 2])
+        self.panning = False
+        self.paused = False
+        self.timestep = TIMESTEP_BASE
+        self.total_time = 0.0
+        self.sub_steps = 1
+        self.spawning = False
+        self.spawn_pos = None
+        self.mouse_pos = None
+        self.VELOCITY_SCALE = 0.05
+        pygame.font.init()
+        self.font = pygame.font.SysFont("Segoe UI", 20)
+        self.trail_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        self.selected_body = None
+        self.use_barnes_hut = False
+        self.theta = 0.5
+        self.show_quadtree = False
         self.quadtree = None
-        
-        # --- PRESET: Simple Solar System ---
-        sun = Body(mass=SOLAR_MASS, 
-                   position=[0, 0], 
-                   velocity=[0, 0], 
-                   color=(255, 255, 0), 
-                   radius=6.96e8, 
-                   name="Sun")
+        self._setup_initial_conditions()
 
-        earth = Body(mass=5.972e24, 
-                     position=[AU, 0], 
-                     velocity=[0, 29783], 
-                     color=(0, 100, 255), 
-                     radius=6.37e6, 
-                     name="Earth")
-                     
+    def _setup_initial_conditions(self):
+        self.bodies.clear()
+        sun = Body(mass=1.0, position=[0, 0], velocity=[0, 0], color=(255, 255, 0), radius=15, name="Sun")
         self.bodies.append(sun)
-        self.bodies.append(earth)
-        
-        # Center the camera on the most massive body (the Sun)
-        self.offset = np.array([WIDTH / 2.0, HEIGHT / 2.0]) - sun.position * self.SCALE
+        self.selected_body = None
+        self.total_time = 0.0
 
+    def _generate_galaxy(self, num_bodies=500):
+        self._setup_initial_conditions()
+        sun = self.bodies[0]
+        for _ in range(num_bodies):
+            dist = random.uniform(2, 15)
+            angle = random.uniform(0, 2 * np.pi)
+            pos = np.array([dist * np.cos(angle), dist * np.sin(angle)])
+            circular_speed = np.sqrt(G * sun.mass / dist)
+            orbital_speed = circular_speed * random.uniform(0.7, 1.3)
+            vel = orbital_speed * np.array([-np.sin(angle), np.cos(angle)])
+            if random.random() < 0.05:
+                mass = random.uniform(1e-5, 5e-5)
+                radius = random.randint(8, 12)
+                color = (255, random.randint(100, 150), 0)
+            else:
+                mass = random.uniform(1e-7, 1e-6)
+                radius = random.randint(2, 5)
+                color = (random.randint(100, 200), random.randint(100, 200), random.randint(200, 255))
+            self.bodies.append(Body(mass, pos, vel, color, radius))
+        self.SCALE = 40
 
-    def run(self):
-        """Main simulation loop."""
-        while self.running:
-            self._handle_input()
-            
-            if not self.paused:
-                self._update_bodies(TIMESTEP)
-                self._handle_collisions()
+    def _calculate_force_direct(self, body_a):
+        total_force = np.array([0, 0], dtype=float)
+        for body_b in self.bodies:
+            if body_a == body_b: continue
+            r_vec = body_b.position - body_a.position
+            dist = np.linalg.norm(r_vec)
+            epsilon = 1e-6 
+            force_magnitude = G * body_a.mass * body_b.mass / (dist**2 + epsilon)
+            force_vector = force_magnitude * (r_vec / dist)
+            total_force += force_vector
+        return total_force
 
-            self._draw()
-            self.clock.tick(60)
-
-    def _handle_input(self):
-        """Handles user input for quitting, pausing, and camera controls."""
-        mouse_pos = np.array(pygame.mouse.get_pos(), dtype=float)
-        
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-            
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_q:
-                    self.running = False
-                if event.key == pygame.K_p:
-                    self.paused = not self.paused
-                if event.key == pygame.K_b:
-                    self.use_barnes_hut = not self.use_barnes_hut
-                if event.key == pygame.K_t:
-                    self.show_quadtree = not self.show_quadtree
-            
-            elif event.type == pygame.MOUSEWHEEL:
-                # Zooming
-                world_pos_before = (mouse_pos - self.offset) / self.SCALE
-                if event.y > 0:
-                    self.SCALE *= 1.1
-                else:
-                    self.SCALE /= 1.1
-                world_pos_after = (mouse_pos - self.offset) / self.SCALE
-                self.offset += (world_pos_after - world_pos_before) * self.SCALE
-
-        # Panning
-        if pygame.mouse.get_pressed()[0]:  # Left-click held
-            rel = pygame.mouse.get_rel()
-            self.offset += np.array([float(rel[0]), float(rel[1])])
-
-    def _draw(self):
-        """Draws all bodies, trails, and UI elements to the screen."""
-        self.screen.fill(BLACK)
-
-        # Draw Quadtree (if enabled)
-        if self.use_barnes_hut and self.show_quadtree and self.quadtree:
-            self._draw_quadtree(self.quadtree)
-
-        # Draw trails and bodies
-        for body in self.bodies:
-            # 1. Draw Trail
-            if len(body.trail) > 2:
-                scaled_trail = [
-                    (self.offset + pos * self.SCALE).astype(int) for pos in body.trail
-                ]
-                pygame.draw.lines(self.screen, body.color, False, scaled_trail, 1)
-
-            # 2. Draw Body
-            pos_x, pos_y = (self.offset + body.position * self.SCALE).astype(int)
-            
-            # Simple scaling for radius (not realistic, but visible)
-            screen_radius = max(2, int(body.radius * self.SCALE * 500)) 
-            
-            # Clamp radius and position to prevent Pygame errors
-            screen_radius = min(screen_radius, 200)
-            if -1000 < pos_x < WIDTH + 1000 and -1000 < pos_y < HEIGHT + 1000:
-                # Draw merge flash
-                if body.merge_flash_timer > 0:
-                    flash_color = (255, 255, 255)
-                    flash_radius = screen_radius + (31 - body.merge_flash_timer) // 3
-                    pygame.draw.circle(self.screen, flash_color, (pos_x, pos_y), flash_radius, 1)
-                    body.merge_flash_timer -= 1
-                
-                pygame.draw.circle(self.screen, body.color, (pos_x, pos_y), screen_radius)
-
-        # Draw UI / Info Text
-        info_text = [
-            f"FPS: {self.clock.get_fps():.1f}",
-            f"Time: {self.total_time / (3600 * 24 * 365.25):.2f} years",
-            f"Bodies: {len(self.bodies)}",
-            f"Mode: {'Barnes-Hut (B)' if self.use_barnes_hut else 'Direct Sum (B)'}",
-            f"Quadtree: {'Visible (T)' if self.show_quadtree else 'Hidden (T)'}",
-            f"Paused: {self.paused} (P)"
-        ]
-        for i, line in enumerate(info_text):
-            text_surf = self.font.render(line, True, WHITE)
-            self.screen.blit(text_surf, (10, 10 + i * 20))
-
-        pygame.display.flip()
-        
-    def _draw_quadtree(self, node):
-        """draws the quadtree boundaries."""
-        if node is None:
-            return
-            
-        x, y, w, h = node.bounds
-        # Convert world coords to screen coords
-        rect_x = int(x * self.SCALE + self.offset[0])
-        rect_y = int(y * self.SCALE + self.offset[1])
-        rect_w = int(w * self.SCALE)
-        rect_h = int(h * self.SCALE)
-        
-        # Only draw if on screen
-        if rect_x < WIDTH and rect_x + rect_w > 0 and rect_y < HEIGHT and rect_y + rect_h > 0:
-            pygame.draw.rect(self.screen, (50, 50, 50), (rect_x, rect_y, rect_w, rect_h), 1)
-
-            if any(node.children):
-                for child in node.children:
-                    self._draw_quadtree(child)
+    def _calculate_force_barnes_hut(self, body, node):
+        if node is None or node.total_mass == 0: return np.array([0.0, 0.0])
+        if node.body is not None:
+            if node.body is not body:
+                r_vec = node.body.position - body.position
+                dist = np.linalg.norm(r_vec)
+                epsilon = 1e-6
+                force_magnitude = G * body.mass * node.body.mass / (dist**2 + epsilon)
+                return force_magnitude * (r_vec / dist)
+            else: return np.array([0.0, 0.0])
+        s = node.bounds[2]
+        d = np.linalg.norm(node.center_of_mass - body.position)
+        if d > 0 and s / d < self.theta:
+            r_vec = node.center_of_mass - body.position
+            dist_sq = d**2
+            epsilon = 1e-6
+            force_magnitude = G * body.mass * node.total_mass / (dist_sq + epsilon)
+            return force_magnitude * (r_vec / d)
+        else:
+            total_force = np.array([0.0, 0.0])
+            for child in node.children:
+                if child: total_force += self._calculate_force_barnes_hut(body, child)
+            return total_force
 
     def _recalculate_all_accelerations(self):
-        """Calculates acceleration for all bodies using Barnes-Hut or Direct Sum."""
-        
-        # Reset accelerations
-        for body in self.bodies:
-            body.acceleration.fill(0.0)
-
-        if self.use_barnes_hut:
-            # --- Barnes-Hut O(n log n) ---
-            
-            # Find bounds
+        if self.use_barnes_hut and len(self.bodies) > 1:
             min_pos = np.min([b.position for b in self.bodies], axis=0)
             max_pos = np.max([b.position for b in self.bodies], axis=0)
-            center = (min_pos + max_pos) / 2.0
-            size = np.max(max_pos - min_pos) * 1.1 # Add 10% padding
-            if size == 0: size = 2 * AU # Handle single-body case
-            
-            # Build quadtree
-            self.quadtree = Quadtree(center[0] - size / 2, center[1] - size / 2, size, size)
+            size = np.max(max_pos - min_pos) * 1.1
+            center = (min_pos + max_pos) / 2
+            self.quadtree = Quadtree(center[0] - size/2, center[1] - size/2, size, size)
+            for body in self.bodies: self.quadtree.insert(body)
             for body in self.bodies:
-                self.quadtree.insert(body)
-                
-            # Calculate forces
+                force = self._calculate_force_barnes_hut(body, self.quadtree)
+                body.acceleration = force / body.mass
+        else:
+            self.quadtree = None
             for body in self.bodies:
-                body.acceleration = self._calculate_force(body, self.quadtree)
-        
-        else:
-            # --- Direct Sum O(n^2) ---
-            self.quadtree = None # No quadtree in this mode
-            for body_a, body_b in combinations(self.bodies, 2):
-                r_vec = body_b.position - body_a.position
-                dist_sq = np.dot(r_vec, r_vec)
-                
-                # Avoid division by zero if bodies are in the same spot
-                if dist_sq == 0:
-                    continue
-                    
-                dist = np.sqrt(dist_sq)
-                
-                # F = G * m1 * m2 / r^2
-                force_mag = (G * body_a.mass * body_b.mass) / dist_sq
-                force_vec = force_mag * (r_vec / dist)
-                
-                # a = F / m
-                body_a.acceleration += force_vec / body_a.mass
-                body_b.acceleration -= force_vec / body_b.mass
+                force = self._calculate_force_direct(body)
+                body.acceleration = force / body.mass
 
-    def _calculate_force(self, body, node):
-        """
-        calculates the force on a body using the Barnes-Hut logic.
-        """
-        if node is None or node.total_mass == 0:
-            return np.array([0.0, 0.0])
-
-        # Case 1: Node is an external node (leaf) with a body
-        if node.body is not None:
-            # Don't calculate force with self
-            if node.body is body:
-                return np.array([0.0, 0.0])
-            
-            # Direct calculation
-            r_vec = node.body.position - body.position
-            dist_sq = np.dot(r_vec, r_vec)
-            if dist_sq == 0:
-                return np.array([0.0, 0.0])
-            dist = np.sqrt(dist_sq)
-            force_mag = (G * body.mass * node.body.mass) / dist_sq
-            force_vec = force_mag * (r_vec / dist)
-            return force_vec / body.mass
-
-        # Case 2: Node is an internal node
-        
-        # Calculate s/d
-        s = node.bounds[2]  # Width of the node's region
-        r_vec = node.center_of_mass - body.position
-        d_sq = np.dot(r_vec, r_vec)
-        if d_sq == 0:
-            return np.array([0.0, 0.0]) # Body is at the center of mass
-        
-        d = np.sqrt(d_sq)
-
-        if (s / d) < BARNES_HUT_THETA:
-            # Case 2a: Node is far enough away. Treat as a single mass.
-            force_mag = (G * body.mass * node.total_mass) / d_sq
-            force_vec = force_mag * (r_vec / d)
-            return force_vec / body.mass
-        else:
-            # Case 2b: Node is too close. Recurse into children.
-            total_acceleration = np.array([0.0, 0.0])
-            for child in node.children:
-                total_acceleration += self._calculate_force(body, child)
-            return total_acceleration
-
-
- 
     def _update_bodies(self, dt):
-        """
-        Updates body positions and velocities using the Velocity Verlet integrator.
-    
-        """
         self.total_time += dt
-
-        # 1. Update positions based on current velocity and acceleration
-        for body in self.bodies:
-            body.position += body.velocity * dt + 0.5 * body.acceleration * dt * dt
-            body.trail.append(body.position.copy())
-
-        # 2. Store the old accelerations before recalculating
-        old_accelerations = {body: body.acceleration for body in self.bodies}
-
-        # 3. Calculate the NEW accelerations at the new positions (ONLY ONCE)
         self._recalculate_all_accelerations()
-
-        # 4. Update velocities using the average of the old and new accelerations
+        for body in self.bodies: body.velocity += 0.5 * body.acceleration * dt
         for body in self.bodies:
-            # Check if the body is still in the simulation (wasn't merged)
-            if body in old_accelerations:
-                body.velocity += 0.5 * (old_accelerations[body] + body.acceleration) * dt
-
-    def _get_bodies_in_node_recursive(self, node, body_list):
-        """A helper to recursively collect all bodies within a given quadtree node."""
-        if node is None:
-            return
-        if node.body is not None:
-            body_list.append(node.body)
-        for child in node.children:
-            self._get_bodies_in_node_recursive(child, body_list)
+            body.position += body.velocity * dt
+            body.trail.append(body.position.copy())
+        self._recalculate_all_accelerations()
+        for body in self.bodies: body.velocity += 0.5 * body.acceleration * dt
+            
+    def _spawn_body(self, end_pos):
+        start_au = (np.array(self.spawn_pos) - self.OFFSET) / self.SCALE
+        velocity = (np.array(end_pos) - self.spawn_pos) * self.VELOCITY_SCALE
+        mass = random.uniform(1e-6, 1e-4)
+        radius = random.randint(3, 8)
+        color = (random.randint(50, 255), random.randint(50, 255), random.randint(50, 255))
+        self.bodies.append(Body(mass, start_au, velocity, color, radius))
 
     def _handle_collisions(self):
-        """
-        Handles collisions efficiently using the quadtree to only check nearby bodies.
-        """
         bodies_to_remove = set()
-        
-        # In Barnes-Hut mode, use the quadtree to find collision pairs.
-        if self.use_barnes_hut and self.quadtree:
-            checked_pairs = set()
-
-            def find_and_resolve(node):
-                if node is None or node.total_mass == 0:
-                    return
-
-                if any(node.children):
-                    bodies_in_node = []
-                    self._get_bodies_in_node_recursive(node, bodies_in_node)
-
-                    for body_a, body_b in combinations(bodies_in_node, 2):
-                        pair_key = tuple(sorted((id(body_a), id(body_b))))
-                        if pair_key in checked_pairs:
-                            continue
-                        
-                        checked_pairs.add(pair_key)
-                        
-                        if body_a not in bodies_to_remove and body_b not in bodies_to_remove:
-                            # --- CRITICAL FIX APPLIED ---
-                            if np.linalg.norm(body_a.position - body_b.position) < (body_a.radius + body_b.radius):
-                                absorber, absorbed = (body_a, body_b) if body_a.mass > body_b.mass else (body_b, body_a)
-                                new_vel = (absorber.mass * absorber.velocity + absorbed.mass * absorbed.velocity) / (absorber.mass + absorbed.mass)
-                                absorber.mass += absorbed.mass
-                                absorber.velocity = new_vel
-                                absorber.radius = (absorber.radius**3 + absorbed.radius**3)**(1/3) # Combine volume
-                                absorber.merge_flash_timer = 30
-                                bodies_to_remove.add(absorbed)
-                    
-                    for child in node.children:
-                        find_and_resolve(child)
-            
-            find_and_resolve(self.quadtree)
-
-        # Fallback to O(n^2) direct-sum mode if not using Barnes-Hut
-        else:
-            for i, body_a in enumerate(self.bodies):
-                if body_a in bodies_to_remove: continue
-                for body_b in self.bodies[i+1:]:
-                    if body_b in bodies_to_remove: continue
-              
-                    if np.linalg.norm(body_a.position - body_b.position) < (body_a.radius + body_b.radius):
-                        absorber, absorbed = (body_a, body_b) if body_a.mass > body_b.mass else (body_b, body_a)
-                        new_vel = (absorber.mass * absorber.velocity + absorbed.mass * absorbed.velocity) / (absorber.mass + absorbed.mass)
-                        absorber.mass += absorbed.mass
-                        absorber.velocity = new_vel
-                        absorber.radius = (absorber.radius**3 + absorbed.radius**3)**(1/3) # Combine volume
-                        absorber.merge_flash_timer = 30
-                        bodies_to_remove.add(absorbed)
-
-        # Update the main bodies list after all checks are done
+        for i, body_a in enumerate(self.bodies):
+            if body_a in bodies_to_remove: continue
+            for body_b in self.bodies[i+1:]:
+                if body_b in bodies_to_remove: continue
+                if np.linalg.norm(body_a.position - body_b.position) < (body_a.radius + body_b.radius) / self.SCALE:
+                    absorber, absorbed = (body_a, body_b) if body_a.mass > body_b.mass else (body_b, body_a)
+                    new_vel = (absorber.mass * absorber.velocity + absorbed.mass * absorbed.velocity) / (absorber.mass + absorbed.mass)
+                    absorber.mass += absorbed.mass
+                    absorber.velocity = new_vel
+                    absorber.radius = (absorber.radius**3 + absorbed.radius**3)**(1/3)
+                    absorber.merge_flash_timer = 30
+                    bodies_to_remove.add(absorbed)
         if bodies_to_remove:
-            if self.selected_body in bodies_to_remove:
-                self.selected_body = None
+            if self.selected_body in bodies_to_remove: self.selected_body = None
             self.bodies = [b for b in self.bodies if b not in bodies_to_remove]
+
+    def _draw_bodies(self):
+        for body in self.bodies:
+            screen_pos = body.position * self.SCALE + self.OFFSET
+            draw_radius = max(body.radius * (self.SCALE / 150)**0.5, 1)
+            if body.merge_flash_timer > 0:
+                p = body.merge_flash_timer / 30
+                color = tuple(int(c + (255 - c) * p) for c in body.color)
+                pygame.draw.circle(self.screen, color, screen_pos.astype(int), int(draw_radius))
+                body.merge_flash_timer -= 1
+            else:
+                pygame.draw.circle(self.screen, body.color, screen_pos.astype(int), int(draw_radius))
+            if body == self.selected_body:
+                pygame.draw.circle(self.screen, (255, 255, 255), screen_pos.astype(int), int(draw_radius) + 4, 2)
+
+    def _draw_trails(self):
+        self.trail_surface.fill((0,0,0,0))
+        for body in self.bodies:
+            if len(body.trail) < 2: continue
+            points = [p * self.SCALE + self.OFFSET for p in body.trail]
+            for i in range(len(points) - 1):
+                alpha = 255 * (i / len(points))
+                color = (*body.color, alpha)
+                pygame.draw.line(self.trail_surface, color, points[i], points[i+1], max(1, int(2 * self.SCALE / 150)))
+        self.screen.blit(self.trail_surface, (0,0))
+
+    def _draw_quadtree(self, node):
+        if node is None: return
+        rect = pygame.Rect(node.bounds[0] * self.SCALE + self.OFFSET[0], node.bounds[1] * self.SCALE + self.OFFSET[1],
+                           node.bounds[2] * self.SCALE, node.bounds[3] * self.SCALE)
+        pygame.draw.rect(self.screen, (50, 50, 50), rect, 1)
+        for child in node.children: self._draw_quadtree(child)
+
+    def _draw_ui(self):
+        time_str = f"{self.total_time / 1e6:.3f} mYears" if self.total_time >= 1e6 else \
+                   f"{self.total_time / 1e3:.2f} kYears" if self.total_time >= 1e3 else \
+                   f"{self.total_time:.1f} Years"
+        self.screen.blit(self.font.render(f"Elapsed Time: {time_str}", True, (255, 255, 255)), (10, 60))
+        self.screen.blit(self.font.render(f"Bodies: {len(self.bodies)}", True, (255, 255, 255)), (10, 10))
+        self.screen.blit(self.font.render(f"Time Multiplier (+/-): {self.timestep / TIMESTEP_BASE:.1f}x", True, (255, 255, 255)), (10, 35))
+        mode_str = "Barnes-Hut (O(nlogn))" if self.use_barnes_hut else "Direct Sum (O(n^2))"
+        mode_color = (0, 255, 150) if self.use_barnes_hut else (255, 150, 0)
+        self.screen.blit(self.font.render(f"Mode (B): {mode_str}", True, mode_color), (10, 85))
+        if self.use_barnes_hut:
+            self.screen.blit(self.font.render(f"Theta (↑↓): {self.theta:.2f}", True, (255, 255, 255)), (10, 110))
+        self.screen.blit(self.font.render(f"Physics Steps/Frame: {self.sub_steps}", True, (255, 255, 255)), (10, 135))
+        self.screen.blit(self.font.render("G: Gen Galaxy", True, (200, 200, 200)), (10, self.height - 55))
+        self.screen.blit(self.font.render("F/S: Fast Forward/Slow", True, (200, 200, 200)), (10, self.height - 30))
+        if self.paused:
+            p_text = self.font.render("PAUSED", True, (255, 200, 0))
+            self.screen.blit(p_text, p_text.get_rect(center=(self.width / 2, 25)))
+            
+    def _draw_inspector(self):
+        if not self.selected_body: return
+        b = self.selected_body
+        name = b.name or "Unnamed"
+        panel = pygame.Rect(self.width - 260, 10, 250, 120)
+        pygame.draw.rect(self.screen, (20, 20, 40, 200), panel, border_radius=10)
+        pygame.draw.rect(self.screen, (100, 100, 120), panel, 2, border_radius=10)
+        self.screen.blit(self.font.render(f"INSPECTING: {name}", True, (255, 255, 0)), (panel.x + 10, panel.y + 5))
+        self.screen.blit(self.font.render(f"Mass: {b.mass:.3e} (Solar)", True, (255, 255, 255)), (panel.x + 10, panel.y + 35))
+        self.screen.blit(self.font.render(f"Pos: [{b.position[0]:.2f}, {b.position[1]:.2f}] AU", True, (255, 255, 255)), (panel.x + 10, panel.y + 60))
+        self.screen.blit(self.font.render(f"Vel: [{b.velocity[0]:.2f}, {b.velocity[1]:.2f}] AU/yr", True, (255, 255, 255)), (panel.x + 10, panel.y + 85))
+
+    def run(self):
+        running = True
+        while running:
+            dt = self.clock.tick(60) / 1000.0
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: running = False
+                if event.type == pygame.MOUSEWHEEL:
+                    m_pos = (np.array(pygame.mouse.get_pos()) - self.OFFSET) / self.SCALE
+                    self.SCALE *= 1.1 if event.y > 0 else 1/1.1
+                    self.OFFSET = -m_pos * self.SCALE + pygame.mouse.get_pos()
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_SPACE: self.paused = not self.paused
+                    if event.key == pygame.K_c: self._setup_initial_conditions()
+                    if event.key in (pygame.K_EQUALS, pygame.K_PLUS): self.timestep *= 2.0
+                    if event.key == pygame.K_MINUS: self.timestep /= 2.0
+                    if event.key == pygame.K_f: self.timestep *= 10.0
+                    if event.key == pygame.K_s: self.timestep /= 10.0
+                    if event.key == pygame.K_b: self.use_barnes_hut = not self.use_barnes_hut
+                    if event.key == pygame.K_q: self.show_quadtree = not self.show_quadtree
+                    if event.key == pygame.K_UP: self.theta = min(2.0, self.theta + 0.05)
+                    if event.key == pygame.K_DOWN: self.theta = max(0.0, self.theta - 0.05)
+                    if event.key == pygame.K_g: self._generate_galaxy()
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 1: self.spawning, self.spawn_pos = True, pygame.mouse.get_pos()
+                    if event.button == 2: self.panning = True; self.selected_body = None
+                    if event.button == 3:
+                        m_pos = (np.array(event.pos) - self.OFFSET) / self.SCALE
+                        clicked = False
+                        for b in reversed(self.bodies):
+                            if np.linalg.norm(b.position - m_pos) < b.radius / self.SCALE:
+                                self.selected_body = b if self.selected_body != b else None
+                                clicked = True; break
+                        if not clicked: self.selected_body = None
+                if event.type == pygame.MOUSEMOTION:
+                    self.mouse_pos = pygame.mouse.get_pos()
+                    if self.panning:
+                        self.OFFSET += event.rel
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if event.button == 1 and self.spawning: self._spawn_body(pygame.mouse.get_pos()); self.spawning = False
+                    if event.button == 2: self.panning = False
+            if not self.paused:
+                self.sub_steps = int(1 + self.timestep / (TIMESTEP_BASE * 50))
+                sub_dt = self.timestep / self.sub_steps
+                for _ in range(self.sub_steps):
+                    self._update_bodies(sub_dt)
+                    self._handle_collisions()
+            if self.selected_body and not self.panning:
+                target = np.array([self.width / 2, self.height / 2])
+                current = self.selected_body.position * self.SCALE + self.OFFSET
+                self.OFFSET += target - current
+            self.screen.fill((0, 0, 10))
+            if self.show_quadtree and self.quadtree: self._draw_quadtree(self.quadtree)
+            self._draw_trails()
+            self._draw_bodies()
+            if self.spawning and self.mouse_pos is not None:
+                pygame.draw.line(self.screen, (255, 255, 255), self.spawn_pos, self.mouse_pos, 2)
+            self._draw_ui()
+            self._draw_inspector()
+            pygame.display.flip()
